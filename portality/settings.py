@@ -1,6 +1,12 @@
 import os
 from esprit import mappings
 
+# ===========================
+# OAG client settings
+
+# FIXME: need to sort out how portentious is going to do config
+OAG_LOOKUP_URL = 'http://howopenisit.org/lookup/'
+
 # ========================
 # MAIN SETTINGS
 

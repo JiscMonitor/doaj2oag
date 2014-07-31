@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name = 'monitorui',
+    name = 'doaj2oag',
     version = '0.0.1',
     packages = find_packages(),
     install_requires = [
-        "requests",
+        "requests==1.1.0",
         "Flask==0.9",
         "esprit",
         "Flask-Login==0.1.3",
