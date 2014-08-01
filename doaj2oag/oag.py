@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta
-import json, requests
+import json, requests, time
 from copy import deepcopy
 
 class RequestState(object):
-    def __init__(self, identifiers, timeout=None, back_off_factor=1, max_back_off=120, max_retries=None):
+    def __init__(self, identifiers, timeout=None, back_off_factor=1, max_back_off=120, max_retries=None, batch_size=1000):
         self.success = {}
         self.error = {}
         self.pending = {}
@@ -17,9 +17,22 @@ class RequestState(object):
         self.back_off_factor = back_off_factor
         self.max_back_off = max_back_off
         self.max_retries = max_retries
+        self.batch_size = batch_size
 
         for ident in identifiers:
             self.pending[ident] = {"init" : self.start, "due" : self.start, "requested" : 0, "maxed" : False}
+
+    def print_parameters(self):
+        params = "Timeout: " + str(self.timeout) + "\n"
+        params += "Back Off Factor: " + str(self.back_off_factor) + "\n"
+        params += "Max Back Off: " + str(self.max_back_off) + "\n"
+        params += "Max Tries per Identifier: " + str(self.max_retries) + "\n"
+        params += "Batch Size: " + str(self.batch_size) + "\n"
+        return params
+
+    def print_status_report(self):
+        status = str(len(self.success.keys())) + " received; " + str(len(self.error.keys())) + " errors; " + str(len(self.pending.keys())) + " pending"
+        return status
 
     def finished(self):
         if len(self.pending.keys()) == 0:
@@ -74,7 +87,7 @@ class RequestState(object):
         return buffer
 
     def flush_error(self):
-        buffer = deepcopy(self.errpr_buffer)
+        buffer = deepcopy(self.error_buffer)
         del self.error_buffer[:]
         return buffer
 
@@ -86,26 +99,27 @@ class RequestState(object):
 
 
 class OAGClient(object):
-    def __init__(self, lookup_url, batch_size=1000):
+    def __init__(self, lookup_url):
         self.lookup_url = lookup_url
-        self.batch_size = batch_size
 
-    def cycle(self, state):
+    def cycle(self, state, verbose=False):
         due = state.get_due()
-        batches = self._batch(due)
+        batches = self._batch(due, state.batch_size)
+        if verbose:
+            print str(len(due)) + " due; requesting in " + str(len(batches)) + " batches"
         for batch in batches:
             result = self._query(batch)
             state.record_result(result)
         return state
 
-    def _batch(self, ids):
+    def _batch(self, ids, batch_size=1000):
         batches = []
         start = 0
         while True:
-            batch = ids[start:start + self.batch_size]
+            batch = ids[start:start + batch_size]
             if len(batch) == 0: break
             batches.append(batch)
-            start += self.batch_size
+            start += batch_size
         return batches
 
     def _query(self, batch):
@@ -116,10 +130,23 @@ class OAGClient(object):
 
 def oag_it(lookup_url, identifiers,
            timeout=None, back_off_factor=1, max_back_off=120, max_retries=None, batch_size=1000,
-            callback=None):
-    state = RequestState(identifiers, timeout=timeout, back_off_factor=back_off_factor, max_back_off=max_back_off, max_retries=max_retries)
-    client = OAGClient(lookup_url, batch_size=batch_size)
+            verbose=True, throttle=5, callback=None):
+    state = RequestState(identifiers, timeout=timeout, back_off_factor=back_off_factor, max_back_off=max_back_off, max_retries=max_retries, batch_size=batch_size)
+    client = OAGClient(lookup_url)
+
+    if verbose:
+        print "Making requests to " + lookup_url + " for " + str(len(identifiers)) + " identifiers"
+        print state.print_parameters()
+        print state.print_status_report()
+
+    first = True
     while not state.finished():
-        client.cycle(state)
+        if first:
+            first = False
+        else:
+            time.sleep(throttle)
+        client.cycle(state, verbose)
+        if verbose:
+            print state.print_status_report()
         if callback is not None:
             callback(state)

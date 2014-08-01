@@ -1,4 +1,4 @@
-import requests, json
+import requests, json, csv
 from portality.core import app
 from doaj2oag import oag
 
@@ -41,10 +41,32 @@ def iterate(q, page_size=1000, limit=None):
             yield r
         q["from"] += page_size
 
-iterator = iterate(query, limit=1000)
+iterator = iterate(query, limit=5000)
 alldois = []
 for res in iterator:
     alldois += [ident.get("id") for ident in res.get("bibjson", {}).get("identifier", []) if ident.get("type") == "doi"]
-print alldois
-oag.oag_it(app.config.get("OAG_LOOKUP_URL"), alldois, timeout=100, batch_size=10)
+
+def output_callback(state):
+    successes = state.flush_success()
+    errors = state.flush_error()
+    with open("oag_success.csv", "a") as f:
+        writer = csv.writer(f)
+        for s in successes:
+            identifier = s.get("identifier", [{}])[0].get("id")
+            ltitle = s.get("license", [{}])[0].get("title")
+            csv_row = [identifier, ltitle]
+            clean_row = [unicode(c).encode("utf8", "replace") if c is not None else "" for c in csv_row]
+            writer.writerow(clean_row)
+
+    with open("oag_error.csv", "a") as f:
+        writer = csv.writer(f)
+        for e in errors:
+            identifier = e.get("identifier", [{}]).get("id")
+            msg = e.get("error")
+            csv_row = [identifier, msg]
+            clean_row = [unicode(c).encode("utf8", "replace") if c is not None else "" for c in csv_row]
+            writer.writerow(clean_row)
+
+
+oag.oag_it(app.config.get("OAG_LOOKUP_URL"), alldois, timeout=500, callback=output_callback)
 
