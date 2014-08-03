@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-import json, requests, time
+import json, requests, time, csv
 from copy import deepcopy
 
 class RequestState(object):
@@ -82,13 +82,13 @@ class RequestState(object):
                 self.pending[id]["maxed"] = True
 
     def flush_success(self):
-        buffer = deepcopy(self.success_buffer)
-        del self.success_buffer[:]
+        buffer = self.success_buffer
+        self.success_buffer = []
         return buffer
 
     def flush_error(self):
-        buffer = deepcopy(self.error_buffer)
-        del self.error_buffer[:]
+        buffer = self.error_buffer
+        self.error_buffer = []
         return buffer
 
     def _backoff(self, times):
@@ -127,6 +127,29 @@ class OAGClient(object):
         resp = requests.post(self.lookup_url, headers={'Accept':'application/json'}, data=data)
         resp.raise_for_status()
         return resp.json()
+
+def csv_closure(success_file, error_file):
+    def csv_callback(state):
+        successes = state.flush_success()
+        errors = state.flush_error()
+        with open(success_file, "a") as f:
+            writer = csv.writer(f)
+            for s in successes:
+                identifier = s.get("identifier", [{}])[0].get("id")
+                ltitle = s.get("license", [{}])[0].get("title")
+                csv_row = [identifier, ltitle]
+                clean_row = [unicode(c).encode("utf8", "replace") if c is not None else "" for c in csv_row]
+                writer.writerow(clean_row)
+
+        with open(error_file, "a") as f:
+            writer = csv.writer(f)
+            for e in errors:
+                identifier = e.get("identifier", [{}]).get("id")
+                msg = e.get("error")
+                csv_row = [identifier, msg]
+                clean_row = [unicode(c).encode("utf8", "replace") if c is not None else "" for c in csv_row]
+                writer.writerow(clean_row)
+    return csv_callback
 
 def oag_it(lookup_url, identifiers,
            timeout=None, back_off_factor=1, max_back_off=120, max_retries=None, batch_size=1000,

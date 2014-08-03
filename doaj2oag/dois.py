@@ -1,4 +1,4 @@
-import requests, json, csv
+import requests, json, csv, esprit
 from portality.core import app
 from doaj2oag import oag
 
@@ -43,21 +43,42 @@ def iterate(q, page_size=1000, limit=None):
 
 iterator = iterate(query, limit=5000)
 alldois = []
+doi_id_map = {}
 for res in iterator:
-    alldois += [ident.get("id") for ident in res.get("bibjson", {}).get("identifier", []) if ident.get("type") == "doi"]
+    thisdois = [ident.get("id") for ident in res.get("bibjson", {}).get("identifier", []) if ident.get("type") == "doi"]
+    for d in thisdois:
+        doi_id_map[d] = res.get("id")
+    alldois += thisdois
 
 def output_callback(state):
-    successes = state.flush_success()
-    errors = state.flush_error()
-    with open("oag_success.csv", "a") as f:
-        writer = csv.writer(f)
-        for s in successes:
-            identifier = s.get("identifier", [{}])[0].get("id")
-            ltitle = s.get("license", [{}])[0].get("title")
-            csv_row = [identifier, ltitle]
-            clean_row = [unicode(c).encode("utf8", "replace") if c is not None else "" for c in csv_row]
-            writer.writerow(clean_row)
+    conn = esprit.raw.Connection(app.config.get("ELASTIC_SEARCH_HOST"), app.config.get("ELASTIC_SEARCH_DB"))
+    success = state.flush_success()
+    for s in success:
+        # first locate the id of the doaj object to be updated
+        doajid = None
+        for i in s.get("identifier", [{}]):
+            if i.get("type") == "doi":
+                doajid = doi_id_map.get(i.get("id"))
+                break
+        if doajid is None:
+            print "could not backtrack to doaj id"
+            continue
 
+        # now get the object from the index
+        doajobj = esprit.raw.unpack_get(esprit.raw.get(conn, "article", doajid))
+
+        # add the licence information
+        bibjson = doajobj.get("bibjson")
+        if bibjson is None:
+            print "no bibjson record"
+            continue
+        bibjson["license"] = s.get("license")
+
+        # now save the record
+        esprit.raw.store(conn, "article", doajobj, doajid)
+        print "saved", doajid
+
+    errors = state.flush_error()
     with open("oag_error.csv", "a") as f:
         writer = csv.writer(f)
         for e in errors:

@@ -29,7 +29,7 @@ SSL = False
 
 # elasticsearch settings
 ELASTIC_SEARCH_HOST = "http://localhost:9200" # remember the http:// or https://
-ELASTIC_SEARCH_DB = "monitor"
+ELASTIC_SEARCH_DB = "doaj"
 INITIALISE_INDEX = False # whether or not to try creating the index and required index types on startup
 
 QUERY_ENDPOINT = "http://staging.doaj.cottagelabs.com/query/journal,article"
