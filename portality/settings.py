@@ -54,12 +54,10 @@ SMTP_PASS = None
 
 # a dict of the ES mappings. identify by name, and include name as first object name
 # and identifier for how non-analyzed fields for faceting are differentiated in the mappings
-"""
 FACET_FIELD = ".exact"
 MAPPINGS = {
-    "reactor" : mappings.for_type(
-        "reactor",
-            mappings.properties(mappings.type_mapping("location", "geo_point")),
+    "article" : mappings.for_type(
+        "article",
             mappings.dynamic_templates(
             [
                 mappings.EXACT,
@@ -67,7 +65,6 @@ MAPPINGS = {
         )
     )
 }
-"""
 
 # ========================
 # QUERY SETTINGS
