@@ -1,6 +1,8 @@
-import requests, json, csv, esprit
+import requests, json, csv, esprit, sys
 from portality.core import app
 from doaj2oag import oag
+
+conn = esprit.raw.Connection(app.config.get("ELASTIC_SEARCH_HOST"), app.config.get("ELASTIC_SEARCH_DB"))
 
 query = {
     "query" : {
@@ -41,7 +43,8 @@ def iterate(q, page_size=1000, limit=None):
             yield r
         q["from"] += page_size
 
-iterator = iterate(query, limit=5000)
+print "Initialising ... requesting all DOIs from DOAJ ..."
+iterator = iterate(query, limit=2000)
 alldois = []
 doi_id_map = {}
 for res in iterator:
@@ -49,10 +52,20 @@ for res in iterator:
     for d in thisdois:
         doi_id_map[d] = res.get("id")
     alldois += thisdois
+print "Received ", len(alldois), "DOIs"
+
+def save_callback(state):
+    print "Saving state to ElasticSearch ...",
+    sys.stdout.flush()
+    j = state.json()
+    esprit.raw.store(conn, "state", j, "experimental_state")
+    print "Complete"
 
 def output_callback(state):
-    conn = esprit.raw.Connection(app.config.get("ELASTIC_SEARCH_HOST"), app.config.get("ELASTIC_SEARCH_DB"))
     success = state.flush_success()
+    if len(success) > 0:
+        print "Writing", len(success), "detected licences to DOAJ ...",
+        sys.stdout.flush()
     for s in success:
         # first locate the id of the doaj object to be updated
         doajid = None
@@ -76,9 +89,13 @@ def output_callback(state):
 
         # now save the record
         esprit.raw.store(conn, "article", doajobj, doajid)
-        print "saved", doajid
+    if len(success) > 0:
+        print "Complete"
 
     errors = state.flush_error()
+    if len(errors) > 0:
+        print "Writing", len(errors), "errors to CSV ...",
+        sys.stdout.flush()
     with open("oag_error.csv", "a") as f:
         writer = csv.writer(f)
         for e in errors:
@@ -87,7 +104,8 @@ def output_callback(state):
             csv_row = [identifier, msg]
             clean_row = [unicode(c).encode("utf8", "replace") if c is not None else "" for c in csv_row]
             writer.writerow(clean_row)
+    if len(success) > 0:
+        print "Complete"
 
-
-oag.oag_it(app.config.get("OAG_LOOKUP_URL"), alldois, timeout=500, callback=output_callback)
+oag.oag_it(app.config.get("OAG_LOOKUP_URL"), alldois, timeout=14400, batch_size=100, callback=output_callback, save_state=save_callback)
 
