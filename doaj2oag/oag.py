@@ -1,9 +1,14 @@
 from datetime import datetime, timedelta
-import json, requests, time, csv, sys
+import json, requests, time, csv, sys, uuid
 from copy import deepcopy
 
 class RequestState(object):
+    # _timestamp_format = "%Y-%m%dT%H:%M:%S.%fZ"
+    _timestamp_format = "%Y-%m-%dT%H:%M:%SZ"
+
     def __init__(self, identifiers, timeout=None, back_off_factor=1, max_back_off=120, max_retries=None, batch_size=1000):
+        self.id = uuid.uuid4().hex
+
         self.success = {}
         self.error = {}
         self.pending = {}
@@ -27,7 +32,7 @@ class RequestState(object):
         params += "Back Off Factor: " + str(self.back_off_factor) + "\n"
         params += "Max Back Off: " + str(self.max_back_off) + "\n"
         params += "Max Tries per Identifier: " + str(self.max_retries) + "\n"
-        params += "Batch Size: " + str(self.batch_size) + "\n"
+        params += "Batch Size: " + str(self.batch_size)
         return params
 
     def print_status_report(self):
@@ -98,34 +103,76 @@ class RequestState(object):
         self.error_buffer = []
         return buffer
 
+    @classmethod
+    def from_json(cls, j):
+        state = RequestState([])
+
+        state.id = j.get("id")
+        if j.get("timetout"):
+            state.timeout = datetime.strptime(j.get("timeout"), cls._timestamp_format)
+        state.start = datetime.strptime(j.get("start"), cls._timestamp_format)
+        state.back_off_factor = j.get("back_off_factor")
+        state.max_back_off = j.get("max_back_off")
+        state.batch_size = j.get("batch_size")
+        if j.get("max_retries"):
+            state.max_retries = j.get("max_retries")
+
+        for s in j.get("success", []):
+            obj = deepcopy(s)
+            obj["init"] = datetime.strptime(obj["init"], cls._timestamp_format)
+            obj["found"] = datetime.strptime(obj["found"], cls._timestamp_format)
+            state.success[s.get("id")] = obj
+
+        for s in j.get("error", []):
+            obj = deepcopy(s)
+            obj["init"] = datetime.strptime(obj["init"], cls._timestamp_format)
+            obj["found"] = datetime.strptime(obj["found"], cls._timestamp_format)
+            state.error[s.get("id")] = obj
+
+        for s in j.get("pending", []):
+            obj = deepcopy(s)
+            obj["init"] = datetime.strptime(obj["init"], cls._timestamp_format)
+            obj["due"] = datetime.strptime(obj["due"], cls._timestamp_format)
+            state.pending[s.get("id")] = obj
+
+        return state
+
     def json(self):
         data = {}
 
-        data["start"] = datetime.strftime(self.start, "%Y-%m%dT%H:%M:%S.%fZ")
+        data["id"] = self.id
+        data["start"] = datetime.strftime(self.start, self._timestamp_format)
         if self.timeout is not None:
-            data["timeout"] = datetime.strftime(self.start, "%Y-%m%dT%H:%M:%S.%fZ")
+            data["timeout"] = datetime.strftime(self.start, self._timestamp_format)
         data["back_off_factor"] = self.back_off_factor
         data["max_back_off"] = self.max_back_off
+        if self.max_retries is not None:
+            data["max_retries"] = self.max_retries
         data["batch_size"] = self.batch_size
 
-        jsuccess = deepcopy(self.success)
-        for k in jsuccess:
-            jsuccess[k]["init"] = datetime.strftime(jsuccess[k]["init"], "%Y-%m%dT%H:%M:%S.%fZ")
-            jsuccess[k]["found"] = datetime.strftime(jsuccess[k]["found"], "%Y-%m%dT%H:%M:%S.%fZ")
+        data["success"] = []
+        for k in self.success:
+            obj = {"id" : k}
+            obj.update(self.success[k])
+            obj["init"] = datetime.strftime(obj["init"], self._timestamp_format)
+            obj["found"] = datetime.strftime(obj["found"], self._timestamp_format)
+            data["success"].append(obj)
 
-        jerror = deepcopy(self.error)
-        for k in jerror:
-            jerror[k]["init"] = datetime.strftime(jerror[k]["init"], "%Y-%m%dT%H:%M:%S.%fZ")
-            jerror[k]["found"] = datetime.strftime(jerror[k]["found"], "%Y-%m%dT%H:%M:%S.%fZ")
+        data["error"] = []
+        for k in self.error:
+            obj = {"id" : k}
+            obj.update(self.error[k])
+            obj["init"] = datetime.strftime(obj["init"], self._timestamp_format)
+            obj["found"] = datetime.strftime(obj["found"], self._timestamp_format)
+            data["error"].append(obj)
 
-        jpending = deepcopy(self.pending)
-        for k in jpending:
-            jpending[k]["init"] = datetime.strftime(jpending[k]["init"], "%Y-%m%dT%H:%M:%S.%fZ")
-            jpending[k]["due"] = datetime.strftime(jpending[k]["due"], "%Y-%m%dT%H:%M:%S.%fZ")
-
-        data["success"] = jsuccess
-        data["error"] = jerror
-        data["pending"] = jpending
+        data["pending"] = []
+        for k in self.pending:
+            obj = {"id" : k}
+            obj.update(self.pending[k])
+            obj["init"] = datetime.strftime(obj["init"], self._timestamp_format)
+            obj["due"] = datetime.strftime(obj["due"], self._timestamp_format)
+            data["pending"].append(obj)
 
         return data
 
@@ -147,6 +194,7 @@ class OAGClient(object):
             print str(len(due)) + " due; requesting in " + str(len(batches)) + " batches"
         first = True
         i = 1
+        print "Processing batch ",
         for batch in batches:
             if first:
                 first = False
@@ -155,7 +203,7 @@ class OAGClient(object):
             result = self._query(batch)
             state.record_result(result)
 
-            print i, " ",
+            print i,
             sys.stdout.flush()
             i += 1
         print ""
@@ -171,10 +219,18 @@ class OAGClient(object):
             start += batch_size
         return batches
 
-    def _query(self, batch):
+    def _query(self, batch, retries=10, retry_throttle=2):
         data = json.dumps(batch)
-        resp = requests.post(self.lookup_url, headers={'Accept':'application/json'}, data=data)
-        resp.raise_for_status()
+        counter = 0
+        while True:
+            resp = requests.post(self.lookup_url, headers={'Accept':'application/json'}, data=data)
+            if resp.status_code == requests.codes.ok:
+                return resp.json()
+            elif counter >= retries:
+                resp.raise_for_status()
+            else:
+                counter += 1
+                time.sleep(retry_throttle)
         return resp.json()
 
 def csv_closure(success_file, error_file):

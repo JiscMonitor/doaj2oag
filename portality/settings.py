@@ -14,7 +14,7 @@ OAG_LOOKUP_URL = 'http://howopenisit.org/lookup/'
 BASE_FILE_PATH = os.path.dirname(os.path.realpath(__file__))
 
 # contact info
-ADMIN_NAME = "WNA"
+ADMIN_NAME = "OAGR"
 ADMIN_EMAIL = "sysadmin@cottagelabs.com"
 ADMINS = ["richard@cottagelabs.com"]
 SUPPRESS_ERROR_EMAILS = False  # should be set to False in production and True in staging
@@ -30,7 +30,7 @@ SSL = False
 # elasticsearch settings
 ELASTIC_SEARCH_HOST = "http://localhost:9200" # remember the http:// or https://
 ELASTIC_SEARCH_DB = "doaj"
-INITIALISE_INDEX = False # whether or not to try creating the index and required index types on startup
+INITIALISE_INDEX = True # whether or not to try creating the index and required index types on startup
 
 # QUERY_ENDPOINT = "http://staging.doaj.cottagelabs.com/query/journal,article"
 QUERY_ENDPOINT = "http://localhost:9200/doaj/article/_search"
@@ -59,6 +59,14 @@ FACET_FIELD = ".exact"
 MAPPINGS = {
     "article" : mappings.for_type(
         "article",
+            mappings.dynamic_templates(
+            [
+                mappings.EXACT,
+            ]
+        )
+    ),
+    "jobs" : mappings.for_type(
+        "jobs",
             mappings.dynamic_templates(
             [
                 mappings.EXACT,
