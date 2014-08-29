@@ -1,6 +1,7 @@
 import requests, json, csv, esprit, sys
 from portality.core import app
 from doaj2oag import oag, oagr
+from datetime import datetime, timedelta
 
 conn = esprit.raw.Connection(app.config.get("ELASTIC_SEARCH_HOST"), app.config.get("ELASTIC_SEARCH_DB"))
 
@@ -32,7 +33,7 @@ def iterate(q, page_size=1000, limit=None):
 
         res = do_query(q)
         rs = [r.get("_source") if "_source" in r else r.get("fields") for r in res.get("hits", {}).get("hits", [])]
-        # print counter, len(rs), res.get("hits", {}).get("total"), len(res.get("hits", {}).get("hits", [])), json.dumps(q)
+
         if len(rs) == 0:
             break
         for r in rs:
@@ -44,18 +45,35 @@ def iterate(q, page_size=1000, limit=None):
         q["from"] += page_size
 
 print "Initialising ... requesting all DOIs from DOAJ ..."
-iterator = iterate(query, limit=10000)
-alldois = []
-# doi_id_map = {}
+iterator = iterate(query, limit=100000)
+doibatch = []
+job_size = 2000
+start = None
+lag = 900 # 900s = 15 mins
 for res in iterator:
-    thisdois = [ident.get("id") for ident in res.get("bibjson", {}).get("identifier", []) if ident.get("type") == "doi"]
-    #for d in thisdois:
-    #    doi_id_map[d] = res.get("id")
-    alldois += thisdois
-print "Received ", len(alldois), "DOIs"
+    thisdois = [ident.get("id").strip() for ident in res.get("bibjson", {}).get("identifier", [])
+                if ident.get("type") == "doi" and ident.get("id") is not None]
+    # FIXME: OAG does not currently handle unicode characters
+    cleaned = []
+    for d in thisdois:
+        try:
+            d.decode("ascii")
+            cleaned.append(d)
+        except:
+            pass
+    # FIXME: note that we do not de-duplicate, but there probably are duplicates
+    doibatch += cleaned
+    if len(doibatch) >= job_size:
+        start = datetime.now() if start is None else start + timedelta(seconds=lag)
+        print "Creating job with", len(doibatch), "DOIs, to start at " + start.strftime("%Y-%m-%d %H:%M:%S")
+        state = oag.RequestState(doibatch, timeout=None, back_off_factor=10, max_back_off=1800, max_retries=100, batch_size=100, start=start)
+        oagr.JobRunner.make_job(state)
+        doibatch = []
 
-state = oag.RequestState(alldois, timeout=None, back_off_factor=10, max_back_off=1800, max_retries=100, batch_size=100)
-oagr.JobRunner.make_job(state)
+if len(doibatch) > 0:
+    start = datetime.now() if start is None else start + timedelta(seconds=lag)
+    print "Creating job with", len(doibatch), "DOIs, to start at " + start.strftime("%Y-%m-%d %H:%M:%S")
+    state = oag.RequestState(doibatch, timeout=None, back_off_factor=10, max_back_off=1800, max_retries=100, batch_size=100, start=start)
+    oagr.JobRunner.make_job(state)
 
-# oag.oag_it(app.config.get("OAG_LOOKUP_URL"), alldois, timeout=14400, batch_size=100, callback=output_callback, save_state=save_callback)
 

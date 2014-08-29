@@ -6,7 +6,7 @@ class RequestState(object):
     # _timestamp_format = "%Y-%m%dT%H:%M:%S.%fZ"
     _timestamp_format = "%Y-%m-%dT%H:%M:%SZ"
 
-    def __init__(self, identifiers, timeout=None, back_off_factor=1, max_back_off=120, max_retries=None, batch_size=1000):
+    def __init__(self, identifiers, timeout=None, back_off_factor=1, max_back_off=120, max_retries=None, batch_size=1000, start=None):
         self.id = uuid.uuid4().hex
 
         self.success = {}
@@ -16,7 +16,7 @@ class RequestState(object):
         self.success_buffer = []
         self.error_buffer = []
 
-        self.start = datetime.now()
+        self.start = datetime.now() if start is None else start
 
         self.timeout = self.start + timedelta(seconds=timeout) if timeout is not None else None
         self.back_off_factor = back_off_factor
@@ -55,11 +55,11 @@ class RequestState(object):
         return [p for p in self.pending.keys() if self.pending[p].get("due") < now and not self.pending[p].get("maxed")]
 
     def next_due(self):
-        latest = None
+        earliest = None
         for p, o in self.pending.iteritems():
-            if latest is None or o.get("due") > latest:
-                latest = o.get("due")
-        return latest
+            if earliest is None or o.get("due") < earliest:
+                earliest = o.get("due")
+        return earliest
 
     def record_result(self, result):
         now = datetime.now()

@@ -24,13 +24,27 @@ class JobRunner(object):
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         query = {
             "query" : {
-                "range" : {
-                    "pending.due" : {
-                        "lte" : now
-                    }
+                "bool" : {
+                    "must" : [
+                        {
+                            "range" : {
+                                "pending.due" : {
+                                    "lte" : now
+                                }
+                            }
+                        },
+                        {
+                            "range" : {
+                                "start" : {
+                                    "lte" : now
+                                }
+                            }
+                        }
+                    ]
                 }
             },
-            "sort" : [{"pending.due" : {"order" : "asc", "mode" : "min"}}],
+            # FIXME: removed because of a bug in ES around date sorting
+            # "sort" : [{"pending.due" : {"order" : "asc", "mode" : "min"}}],
             "fields" : ["id"],
             "size" : 10000
         }
@@ -46,19 +60,34 @@ class JobRunner(object):
             counter += 1
             yield state, counter, len(results)
 
-    def get_finished(self):
-        pass
+    def job_statuses(self):
+        query = {
+            "query" : { "match_all" : {}},
+            "fields" : ["id", "status"],
+            "size" : 100
+        }
+
+        resp = esprit.raw.search(self.conn, self.index, query=query)
+        results = esprit.raw.unpack_result(resp)
+
+        statuses = {}
+        for res in results:
+            statuses[res.get("id")] = res.get("status")
+        return statuses
 
     def save_job(self, state):
         print "Saving state to ElasticSearch ...",
         sys.stdout.flush()
         j = state.json()
+        is_finished = state.finished()
+        j["status"] = "finished" if is_finished else "active"
         esprit.raw.store(self.conn, self.index, j, j.get("id"))
         print "Complete"
 
     def cycle_state(self, state):
         if self.verbose:
-            print "Processing job " + state.id
+            now = datetime.now()
+            print now.strftime("%Y-%m-%d %H:%M:%S") + " Processing job " + state.id
             print state.print_parameters()
             print state.print_status_report()
 
@@ -77,7 +106,15 @@ class JobRunner(object):
         # if we have done work here, update the next due time for the busy
         # loop aboge
         next = state.next_due()
-        print "Next request is due at", datetime.strftime(next, "%Y-%m-%d %H:%M:%S"), "\n"
+        if next is not None:
+            print "Next request is due at", datetime.strftime(next, "%Y-%m-%d %H:%M:%S"), "\n"
+        else:
+            print "JOB " + state.id + " HAS COMPLETED!!!"
+
+    def print_job_statuses(self):
+        stats = self.job_statuses()
+        for id, stat in stats.iteritems():
+            print id, stat
 
     def run(self):
         print "Starting OAGR ... Started"
@@ -99,6 +136,9 @@ class JobRunner(object):
                 if col_counter >= 36:
                     print ""
                     col_counter = 0
+            else:
+                print "Job Statuses"
+                self.print_job_statuses()
 
 def doaj_closure():
 
@@ -114,13 +154,7 @@ def doaj_closure():
         }
         resp = esprit.raw.search(conn, "article", query=query)
         res = esprit.raw.unpack_result(resp)
-        if len(res) == 0:
-            print "Unable to find DOAJ item for DOI " + doi
-            return None
-        elif len(res) > 1:
-            print "Multiple DOAJ items with DOI " + doi
-            return None
-        return res[0]
+        return res
 
     def doaj_callback(state):
         success = state.flush_success()
@@ -128,26 +162,30 @@ def doaj_closure():
             print "Writing", len(success), "detected licences to DOAJ ..."
         for s in success:
             # first locate the id of the doaj object to be updated
-            doajobj = None
+            doajobjs = []
+            identifier = None
             for i in s.get("identifier", [{}]):
                 if i.get("type") == "doi":
-                    doajobj = get_by_doi(i.get("id"))
+                    identifier = i.get("id")
+                    doajobjs = get_by_doi(i.get("id"))
                     break
-            if doajobj is None:
-                print "could not write result to DOAJ"
+            if len(doajobjs) == 0:
+                print "Unable to trace DOAJ item to write to", identifier
                 continue
 
-            # add the licence information
-            bibjson = doajobj.get("bibjson")
-            if bibjson is None:
-                print "no bibjson record"
-                continue
-            bibjson["license"] = s.get("license")
+            # add the licence information to every record we get back
+            for doajobj in doajobjs:
+                bibjson = doajobj.get("bibjson")
+                if bibjson is None:
+                    print "no bibjson record"
+                    continue
+                bibjson["license"] = s.get("license")
 
-            # now save the record
-            esprit.raw.store(conn, "article", doajobj, doajobj.get("id"))
+                # now save the record
+                esprit.raw.store(conn, "article", doajobj, doajobj.get("id"))
+
         if len(success) > 0:
-            print "Complete"
+            print "Finished writing to DOAJ"
 
         errors = state.flush_error()
         if len(errors) > 0:
