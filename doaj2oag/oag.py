@@ -70,7 +70,11 @@ class RequestState(object):
 
         for s in successes:
             id = s.get("identifier")[0].get("id")
-            self.success[id] = deepcopy(self.pending[id])
+            ourrecord = self.pending.get(id)
+            if ourrecord is None:
+                print "No record of pending id " + id
+                continue
+            self.success[id] = deepcopy(ourrecord)
             self.success[id]["requested"] += 1
             self.success[id]["found"] = now
             del self.success[id]["due"]
@@ -79,7 +83,11 @@ class RequestState(object):
 
         for e in errors:
             id = e.get("identifier").get("id")
-            self.error[id] = deepcopy(self.pending[id])
+            ourrecord = self.pending.get(id)
+            if ourrecord is None:
+                print "No record of pending id " + id
+                continue
+            self.error[id] = deepcopy(ourrecord)
             self.error[id]["requested"] += 1
             self.error[id]["found"] = now
             del self.error[id]["due"]
@@ -88,6 +96,10 @@ class RequestState(object):
 
         for p in processing:
             id = p.get("identifier").get("id")
+            ourrecord = self.pending.get(id)
+            if ourrecord is None:
+                print "No record of pending id " + id
+                continue
             self.pending[id]["requested"] += 1
             self.pending[id]["due"] = self._backoff(self.pending[id]["requested"])
             if self.max_retries is not None and self.pending[id]["requested"] >= self.max_retries:
@@ -231,6 +243,7 @@ class OAGClient(object):
             else:
                 counter += 1
                 time.sleep(retry_throttle)
+                print "(retry)"
         return resp.json()
 
 def csv_closure(success_file, error_file):

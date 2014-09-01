@@ -5,10 +5,30 @@ from datetime import datetime, timedelta
 
 conn = esprit.raw.Connection(app.config.get("ELASTIC_SEARCH_HOST"), app.config.get("ELASTIC_SEARCH_DB"))
 
+"""
 query = {
     "query" : {
         "term" : {
             "bibjson.identifier.type.exact" : "doi"
+        }
+    }
+}
+"""
+
+query = {
+    "query":{
+        "filtered":{
+            "query":{"match_all":{}},
+            "filter":{
+                "bool":{
+                    "must":[
+                        {"term":{"_type":"article"}},
+                        {"term":{"index.country.exact":"United Kingdom"}},
+                        {"term":{"index.language.exact":"English"}},
+                        {"term":{"bibjson.identifier.type.exact" : "doi"}}
+                    ]
+                }
+            }
         }
     }
 }
@@ -45,7 +65,7 @@ def iterate(q, page_size=1000, limit=None):
         q["from"] += page_size
 
 print "Initialising ... requesting all DOIs from DOAJ ..."
-iterator = iterate(query, limit=100000)
+iterator = iterate(query)
 doibatch = []
 job_size = 2000
 start = None
